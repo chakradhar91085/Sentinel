@@ -2,8 +2,15 @@ import joblib
 import json
 import argparse
 import sys
+import re
 
-def predict_toxicity(text):
+def clean_text(text):
+    text = str(text).lower()
+    text = re.sub(r'[^a-z\s]', '', text)
+    return text.strip()
+
+def predict_toxicity(raw_text):
+    text = clean_text(raw_text)
     try:
         model = joblib.load("toxicity_model.pkl")
     except FileNotFoundError:
