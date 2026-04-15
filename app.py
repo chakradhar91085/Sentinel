@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import joblib
 import re
@@ -12,6 +13,15 @@ app = FastAPI(
     title="Sentinel API",
     description="Backend API for Toxicity Detection",
     version="1.0.0"
+)
+
+# Add CORS Middleware to allow requests from our UI
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Load the model directly into memory on startup

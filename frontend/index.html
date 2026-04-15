@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sentinel | AI Toxicity Moderation</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="background-animation">
+        <div class="glow-orb orb-1"></div>
+        <div class="glow-orb orb-2"></div>
+    </div>
+
+    <main class="container glass-card">
+        <header>
+            <div class="logo">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                </svg>
+                <h1>Sentinel</h1>
+            </div>
+            <p class="subtitle">AI-Powered Content Moderation</p>
+        </header>
+
+        <section class="scanner-section">
+            <div class="input-wrapper">
+                <textarea id="commentInput" placeholder="Type a comment to analyze its toxicity..."></textarea>
+                <div class="input-focus-ring"></div>
+            </div>
+            <button id="scanBtn" class="btn-primary">
+                <span class="btn-text">Analyze Content</span>
+                <span class="loader hidden"></span>
+            </button>
+        </section>
+
+        <section id="resultsSection" class="results-fade hidden">
+            <div class="result-header">
+                <h2>Analysis Result</h2>
+            </div>
+            
+            <div class="score-container">
+                <div class="score-ring" id="scoreRing">
+                    <svg viewBox="0 0 100 100">
+                        <circle class="ring-bg" cx="50" cy="50" r="45"></circle>
+                        <circle class="ring-progress" id="ringProgress" cx="50" cy="50" r="45"></circle>
+                    </svg>
+                    <div class="score-number" id="scoreDisplay">0%</div>
+                </div>
+                
+                <div class="verdict-box" id="verdictBox">
+                    <p class="label-title">Status</p>
+                    <h3 id="verdictText">Clean</h3>
+                </div>
+            </div>
+        </section>
+        
+        <div id="errorBox" class="error-toast hidden">
+            <p>Failed to connect to backend API.</p>
+        </div>
+    </main>
+
+    <script src="script.js"></script>
+</body>
+</html>
