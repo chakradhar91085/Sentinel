@@ -2,3 +2,5 @@ scikit-learn
 pandas
 datasets
 joblib
+fastapi
+uvicorn
