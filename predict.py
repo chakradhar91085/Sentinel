@@ -1,31 +1,50 @@
-import joblib
 import json
 import argparse
 import sys
-import re
+import torch
+from transformers import DistilBertTokenizer, DistilBertForSequenceClassification
 
-def clean_text(text):
-    text = str(text).lower()
-    text = re.sub(r'[^a-z\s]', '', text)
-    return text.strip()
+MODEL_DIR = "sentinel_model"
 
-def predict_toxicity(raw_text):
-    text = clean_text(raw_text)
+def load_model():
+    """Load the fine-tuned DistilBERT model and tokenizer."""
     try:
-        model = joblib.load("toxicity_model.pkl")
-    except FileNotFoundError:
-        print(json.dumps({"error": "Model not found. Please run train.py first."}))
+        tokenizer = DistilBertTokenizer.from_pretrained(MODEL_DIR)
+        model = DistilBertForSequenceClassification.from_pretrained(MODEL_DIR)
+        model.eval()
+        return tokenizer, model
+    except Exception:
+        print(json.dumps({"error": f"Model not found in '{MODEL_DIR}/'. Please run train_transformer.py first."}))
         sys.exit(1)
 
-    # Predict probability of class 1 (toxic)
-    # predict_proba returns [[P(class 0), P(class 1)]]
-    prob = model.predict_proba([text])[0][1]
-    
+def predict_toxicity(raw_text, tokenizer, model):
+    """Run inference on a single text input using the transformer model."""
+    # DistilBERT tokenizer handles all preprocessing (no manual clean_text needed)
+    encoding = tokenizer(
+        raw_text,
+        add_special_tokens=True,
+        max_length=128,
+        padding="max_length",
+        truncation=True,
+        return_attention_mask=True,
+        return_tensors="pt",
+    )
+
+    with torch.no_grad():
+        outputs = model(
+            input_ids=encoding["input_ids"],
+            attention_mask=encoding["attention_mask"],
+        )
+
+    # Softmax to convert logits → probabilities
+    probs = torch.nn.functional.softmax(outputs.logits, dim=1)
+    toxic_prob = probs[0][1].item()  # Class 1 = toxic
+
     result = {
-        "toxicity": round(float(prob), 4),
-        "label": "toxic" if prob >= 0.5 else "non-toxic"
+        "toxicity": round(toxic_prob, 4),
+        "label": "toxic" if toxic_prob >= 0.5 else "non-toxic"
     }
-    
+
     print(json.dumps(result, indent=2))
 
 if __name__ == "__main__":
@@ -33,4 +52,5 @@ if __name__ == "__main__":
     parser.add_argument("text", type=str, help="The comment text to analyze")
     args = parser.parse_args()
 
-    predict_toxicity(args.text)
+    tokenizer, model = load_model()
+    predict_toxicity(args.text, tokenizer, model)

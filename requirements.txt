@@ -4,3 +4,6 @@ datasets
 joblib
 fastapi
 uvicorn
+transformers
+torch
+accelerate
