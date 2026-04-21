@@ -7,28 +7,14 @@
     <meta name="description" content="Real-time AI-powered content moderation using DistilBERT transformer technology. Analyze text toxicity instantly.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <canvas id="particleCanvas"></canvas>
-
     <div class="container">
         <!-- Header -->
         <header class="header">
             <div class="brand">
-                <div class="shield-wrapper">
-                    <svg class="shield-icon" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="url(#shieldGrad)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <defs>
-                            <linearGradient id="shieldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                                <stop offset="0%" style="stop-color:#6366f1"/>
-                                <stop offset="100%" style="stop-color:#a855f7"/>
-                            </linearGradient>
-                        </defs>
-                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-                    </svg>
-                    <div class="shield-pulse"></div>
-                </div>
                 <h1>Sentinel</h1>
             </div>
             <div class="header-stats">
@@ -45,32 +31,30 @@
         </header>
 
         <!-- Main Card -->
-        <main class="main-card glass" id="mainCard">
+        <main class="main-card" id="mainCard">
             <!-- Scanner Section -->
             <section class="scanner">
                 <div class="section-label">
-                    <div class="label-dot"></div>
                     <span>Content Scanner</span>
                 </div>
 
                 <div class="textarea-wrapper" id="textareaWrapper">
                     <textarea
                         id="commentInput"
-                        placeholder="Paste or type text to scan for toxicity..."
+                        placeholder="What would you like to check?"
                         maxlength="5000"
                         spellcheck="false"
                     ></textarea>
                     <div class="textarea-footer">
                         <span class="char-counter"><span id="charCount">0</span> / 5,000</span>
-                        <span class="shortcut-badge">Ctrl + Enter</span>
                     </div>
                 </div>
 
                 <div class="quick-tests">
-                    <button class="chip chip-safe" data-text="You're doing great, keep up the amazing work! I really appreciate your contributions to the team.">👋 Friendly</button>
-                    <button class="chip chip-danger" data-text="You are the worst person ever, I absolutely despise everything about you and wish you'd disappear.">💀 Hostile</button>
-                    <button class="chip chip-neutral" data-text="The quarterly earnings report indicates a 12% increase in revenue compared to the previous fiscal year.">📊 Neutral</button>
-                    <button class="chip chip-warn" data-text="Shut up you stupid idiot, nobody cares about your dumb opinions. Just stop talking already.">🤬 Abusive</button>
+                    <button class="chip chip-safe" data-text="You're doing great, keep up the amazing work! I really appreciate your contributions to the team.">friendly</button>
+                    <button class="chip chip-danger" data-text="You are the worst person ever, I absolutely despise everything about you and wish you'd disappear.">hostile</button>
+                    <button class="chip chip-neutral" data-text="The quarterly earnings report indicates a 12% increase in revenue compared to the previous fiscal year.">neutral</button>
+                    <button class="chip chip-warn" data-text="Shut up you stupid idiot, nobody cares about your dumb opinions. Just stop talking already.">harsh</button>
                 </div>
 
                 <button id="scanBtn" class="btn-scan">
@@ -79,7 +63,7 @@
                             <circle cx="11" cy="11" r="8"/>
                             <line x1="21" y1="21" x2="16.65" y2="16.65"/>
                         </svg>
-                        <span>Analyze Content</span>
+                        <span>Analyze</span>
                     </div>
                     <div class="btn-scan-loading hidden" id="btnLoading">
                         <div class="dot-pulse">
@@ -87,7 +71,7 @@
                             <div class="dot"></div>
                             <div class="dot"></div>
                         </div>
-                        <span>Scanning...</span>
+                        <span>Scanning…</span>
                     </div>
                 </button>
             </section>
@@ -98,8 +82,7 @@
             <!-- Results Section -->
             <section class="results" id="resultsSection">
                 <div class="section-label">
-                    <div class="label-dot label-dot-result"></div>
-                    <span>Analysis Result</span>
+                    <span>Result</span>
                 </div>
 
                 <div class="results-grid">
@@ -107,20 +90,6 @@
                     <div class="gauge-card">
                         <div class="arc-gauge">
                             <svg viewBox="0 0 200 120" id="gaugeSvg">
-                                <defs>
-                                    <linearGradient id="gaugeGradSafe" x1="0%" y1="0%" x2="100%" y2="0%">
-                                        <stop offset="0%" style="stop-color:#10b981"/>
-                                        <stop offset="100%" style="stop-color:#34d399"/>
-                                    </linearGradient>
-                                    <linearGradient id="gaugeGradWarn" x1="0%" y1="0%" x2="100%" y2="0%">
-                                        <stop offset="0%" style="stop-color:#f59e0b"/>
-                                        <stop offset="100%" style="stop-color:#fbbf24"/>
-                                    </linearGradient>
-                                    <linearGradient id="gaugeGradDanger" x1="0%" y1="0%" x2="100%" y2="0%">
-                                        <stop offset="0%" style="stop-color:#ef4444"/>
-                                        <stop offset="100%" style="stop-color:#f87171"/>
-                                    </linearGradient>
-                                </defs>
                                 <path class="gauge-track" d="M 15 100 A 85 85 0 0 1 185 100" />
                                 <path class="gauge-fill" id="gaugeFill" d="M 15 100 A 85 85 0 0 1 185 100" />
                             </svg>
@@ -129,22 +98,11 @@
                                 <span class="gauge-unit">%</span>
                             </div>
                         </div>
-                        <span class="gauge-caption">Toxicity Score</span>
+                        <span class="gauge-caption">toxicity</span>
                     </div>
 
                     <!-- Verdict -->
                     <div class="verdict-card" id="verdictCard">
-                        <div class="verdict-icon-wrapper" id="verdictIconWrapper">
-                            <svg id="verdictIconSafe" class="verdict-svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
-                                <polyline points="22 4 12 14.01 9 11.01"/>
-                            </svg>
-                            <svg id="verdictIconDanger" class="verdict-svg hidden" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
-                                <line x1="12" y1="9" x2="12" y2="13"/>
-                                <line x1="12" y1="17" x2="12.01" y2="17"/>
-                            </svg>
-                        </div>
                         <h3 class="verdict-title" id="verdictTitle">Safe Content</h3>
                         <p class="verdict-desc" id="verdictDesc">This content appears to be safe and non-harmful.</p>
                         <div class="confidence-wrapper">
@@ -164,21 +122,15 @@
         <!-- History Section -->
         <section class="history-section" id="historySection">
             <div class="history-header">
-                <h3 class="history-title">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <circle cx="12" cy="12" r="10"/>
-                        <polyline points="12 6 12 12 16 14"/>
-                    </svg>
-                    Recent Scans
-                </h3>
-                <button id="clearHistoryBtn" class="btn-clear">Clear All</button>
+                <h3 class="history-title">Recent</h3>
+                <button id="clearHistoryBtn" class="btn-clear">Clear</button>
             </div>
-            <div class="history-scroll" id="historyScroll"></div>
+            <div class="history-list" id="historyList"></div>
         </section>
 
         <!-- Footer -->
         <footer class="footer">
-            <span>Powered by DistilBERT · Built with FastAPI</span>
+            <span>Sentinel</span>
         </footer>
     </div>
 

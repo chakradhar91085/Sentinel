@@ -7,7 +7,6 @@ const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 
 const DOM = {
-    canvas:          $('#particleCanvas'),
     mainCard:        $('#mainCard'),
     commentInput:    $('#commentInput'),
     charCount:       $('#charCount'),
@@ -19,14 +18,12 @@ const DOM = {
     gaugeFill:       $('#gaugeFill'),
     gaugePercent:    $('#gaugePercent'),
     verdictCard:     $('#verdictCard'),
-    verdictIconSafe: $('#verdictIconSafe'),
-    verdictIconDanger: $('#verdictIconDanger'),
     verdictTitle:    $('#verdictTitle'),
     verdictDesc:     $('#verdictDesc'),
     confidenceValue: $('#confidenceValue'),
     confidenceFill:  $('#confidenceFill'),
     historySection:  $('#historySection'),
-    historyScroll:   $('#historyScroll'),
+    historyList:     $('#historyList'),
     clearHistoryBtn: $('#clearHistoryBtn'),
     toast:           $('#toast'),
     toastMessage:    $('#toastMessage'),
@@ -53,105 +50,23 @@ try {
 
 
 /* ===========================================
-   PARTICLE SYSTEM
-   =========================================== */
-class ParticleField {
-    constructor(canvas) {
-        this.canvas = canvas;
-        this.ctx = canvas.getContext('2d');
-        this.particles = [];
-        this.count = 55;
-        this.maxDist = 130;
-        this.resize();
-        this.init();
-        window.addEventListener('resize', () => this.resize());
-    }
-
-    resize() {
-        this.canvas.width = window.innerWidth;
-        this.canvas.height = window.innerHeight;
-    }
-
-    init() {
-        this.particles = [];
-        for (let i = 0; i < this.count; i++) {
-            this.particles.push({
-                x: Math.random() * this.canvas.width,
-                y: Math.random() * this.canvas.height,
-                vx: (Math.random() - 0.5) * 0.25,
-                vy: (Math.random() - 0.5) * 0.25,
-                r: Math.random() * 1.5 + 0.5,
-                o: Math.random() * 0.25 + 0.08,
-            });
-        }
-    }
-
-    update() {
-        for (const p of this.particles) {
-            p.x += p.vx;
-            p.y += p.vy;
-            if (p.x < 0 || p.x > this.canvas.width) p.vx *= -1;
-            if (p.y < 0 || p.y > this.canvas.height) p.vy *= -1;
-        }
-    }
-
-    draw() {
-        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-
-        // Connections
-        for (let i = 0; i < this.particles.length; i++) {
-            for (let j = i + 1; j < this.particles.length; j++) {
-                const dx = this.particles[i].x - this.particles[j].x;
-                const dy = this.particles[i].y - this.particles[j].y;
-                const dist = Math.sqrt(dx * dx + dy * dy);
-                if (dist < this.maxDist) {
-                    const opacity = (1 - dist / this.maxDist) * 0.06;
-                    this.ctx.strokeStyle = `rgba(99, 102, 241, ${opacity})`;
-                    this.ctx.lineWidth = 0.5;
-                    this.ctx.beginPath();
-                    this.ctx.moveTo(this.particles[i].x, this.particles[i].y);
-                    this.ctx.lineTo(this.particles[j].x, this.particles[j].y);
-                    this.ctx.stroke();
-                }
-            }
-        }
-
-        // Dots
-        for (const p of this.particles) {
-            this.ctx.fillStyle = `rgba(99, 102, 241, ${p.o})`;
-            this.ctx.beginPath();
-            this.ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-            this.ctx.fill();
-        }
-    }
-
-    animate() {
-        this.update();
-        this.draw();
-        requestAnimationFrame(() => this.animate());
-    }
-}
-
-
-/* ===========================================
    GAUGE HELPERS
    =========================================== */
 function getGaugeColor(pct) {
-    if (pct < 30) return { gradient: 'url(#gaugeGradSafe)', glow: 'glow-safe', cls: 'safe' };
-    if (pct < 60) return { gradient: 'url(#gaugeGradWarn)', glow: 'glow-warn', cls: 'warn' };
-    return { gradient: 'url(#gaugeGradDanger)', glow: 'glow-danger', cls: 'danger' };
+    if (pct < 30) return { color: 'var(--color-safe)', cls: 'safe' };
+    if (pct < 60) return { color: 'var(--color-warn)', cls: 'warn' };
+    return { color: 'var(--color-danger)', cls: 'danger' };
 }
 
 function animateGauge(targetPct) {
     const offset = GAUGE_ARC_LENGTH * (1 - targetPct / 100);
     const color = getGaugeColor(targetPct);
 
-    DOM.gaugeFill.setAttribute('stroke', color.gradient);
-    DOM.gaugeFill.className.baseVal = `gauge-fill ${color.glow}`;
+    DOM.gaugeFill.style.stroke = color.color;
     DOM.gaugeFill.style.strokeDashoffset = offset;
 
     // Animate counter
-    const duration = 1200;
+    const duration = 1400;
     const start = performance.now();
 
     function tick(now) {
@@ -237,32 +152,13 @@ function showResults(data, text) {
     const pct = Math.round(data.toxicity * 100);
     const confidence = Math.round(Math.abs(data.toxicity - 0.5) * 200);
     const verdict = getVerdict(data.toxicity);
-    const isToxic = data.label === 'toxic';
 
     // Show divider + results
     DOM.resultsDivider.classList.add('visible');
     DOM.resultsSection.classList.add('visible');
 
-    // Flash effect on card
-    const flashClass = isToxic ? 'flash-danger' : 'flash-safe';
-    DOM.mainCard.classList.add(flashClass);
-    DOM.mainCard.addEventListener('animationend', () => {
-        DOM.mainCard.classList.remove(flashClass);
-    }, { once: true });
-
-    // Update result dot color
-    const resultDot = DOM.resultsSection.querySelector('.label-dot-result');
-    if (resultDot) {
-        resultDot.style.background = isToxic ? 'var(--color-danger)' : 'var(--color-safe)';
-        resultDot.style.boxShadow = isToxic
-            ? '0 0 8px rgba(239, 68, 68, 0.5)'
-            : '0 0 8px rgba(16, 185, 129, 0.5)';
-    }
-
     // Verdict card
     DOM.verdictCard.className = `verdict-card verdict-${verdict.cls}`;
-    DOM.verdictIconSafe.classList.toggle('hidden', isToxic);
-    DOM.verdictIconDanger.classList.toggle('hidden', !isToxic);
     DOM.verdictTitle.textContent = verdict.title;
     DOM.verdictDesc.textContent = verdict.desc;
 
@@ -301,26 +197,26 @@ function renderHistory() {
     }
 
     DOM.historySection.classList.add('visible');
-    DOM.historyScroll.innerHTML = history.map((entry, i) => {
+    DOM.historyList.innerHTML = history.map((entry, i) => {
         const pct = Math.round(entry.toxicity * 100);
         const timeAgo = getTimeAgo(entry.timestamp);
         const colorCls = pct < 30 ? 'safe' : pct < 60 ? 'warn' : 'danger';
 
         return `
-            <div class="history-card" data-index="${i}" title="Click to load this text">
-                <div class="history-card-top">
+            <div class="history-item" data-index="${i}" title="Click to load this text">
+                <p class="history-item-text">${escapeHtml(entry.text)}${entry.text.length >= 120 ? '…' : ''}</p>
+                <div class="history-item-meta">
                     <span class="history-badge badge-${colorCls}">${pct}%</span>
                     <span class="history-time">${timeAgo}</span>
                 </div>
-                <p class="history-text">${escapeHtml(entry.text)}${entry.text.length >= 120 ? '…' : ''}</p>
             </div>
         `;
     }).join('');
 
     // Click to load text
-    DOM.historyScroll.querySelectorAll('.history-card').forEach(card => {
-        card.addEventListener('click', () => {
-            const idx = parseInt(card.dataset.index);
+    DOM.historyList.querySelectorAll('.history-item').forEach(item => {
+        item.addEventListener('click', () => {
+            const idx = parseInt(item.dataset.index);
             DOM.commentInput.value = history[idx].fullText || history[idx].text;
             updateCharCount();
             DOM.commentInput.focus();
@@ -415,10 +311,6 @@ DOM.clearHistoryBtn.addEventListener('click', clearHistory);
    INITIALIZE
    =========================================== */
 document.addEventListener('DOMContentLoaded', () => {
-    // Particles
-    const pf = new ParticleField(DOM.canvas);
-    pf.animate();
-
     // History + Stats
     renderHistory();
     updateStats();
