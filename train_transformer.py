@@ -220,9 +220,10 @@ def main():
         num_labels=2,
     )
 
-    # FREEZE the DistilBERT base transformer layers
-    # Only the classifier head (pre_classifier + classifier) will train
-    # This makes CPU training ~10x faster while still leveraging pretrained knowledge
+    # FREEZE the DistilBERT base transformer layers.
+    # Only the classifier head (pre_classifier + classifier) will train.
+    # This prevents overfitting on small datasets and produces well-calibrated
+    # probability scores instead of overconfident 0%/100% predictions.
     for param in model.distilbert.parameters():
         param.requires_grad = False
 

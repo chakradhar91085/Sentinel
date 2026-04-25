@@ -29,6 +29,8 @@ const DOM = {
     toastMessage:    $('#toastMessage'),
     totalScans:      $('#totalScans'),
     avgScore:        $('#avgScore'),
+    clearTextBtn:    $('#clearTextBtn'),
+    copyResultBtn:   $('#copyResultBtn'),
 };
 
 // ── Config ──────────────────────────────────
@@ -252,6 +254,9 @@ function updateStats() {
    =========================================== */
 function updateCharCount() {
     DOM.charCount.textContent = DOM.commentInput.value.length.toLocaleString();
+    if (DOM.clearTextBtn) {
+        DOM.clearTextBtn.classList.toggle('hidden', DOM.commentInput.value.length === 0);
+    }
 }
 
 function showToast(message) {
@@ -305,6 +310,29 @@ document.querySelectorAll('.chip').forEach(chip => {
 });
 
 DOM.clearHistoryBtn.addEventListener('click', clearHistory);
+
+if (DOM.clearTextBtn) {
+    DOM.clearTextBtn.addEventListener('click', () => {
+        DOM.commentInput.value = '';
+        updateCharCount();
+        DOM.commentInput.focus();
+    });
+}
+
+if (DOM.copyResultBtn) {
+    DOM.copyResultBtn.addEventListener('click', () => {
+        const text = DOM.commentInput.value.trim();
+        const verdict = DOM.verdictTitle.textContent;
+        const confidence = DOM.confidenceValue.textContent;
+        const resultText = `Sentinel Analysis:\nContent: "${text}"\nVerdict: ${verdict} (Confidence: ${confidence})`;
+        
+        navigator.clipboard.writeText(resultText).then(() => {
+            showToast('Result copied to clipboard!');
+        }).catch(() => {
+            showToast('Failed to copy result.');
+        });
+    });
+}
 
 
 /* ===========================================
