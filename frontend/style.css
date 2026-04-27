@@ -79,13 +79,49 @@ body::before {
 .container {
     position: relative;
     z-index: 1;
-    max-width: 640px;
+    max-width: 960px;
     margin: 0 auto;
     padding: 48px 20px 32px;
     min-height: 100vh;
     display: flex;
     flex-direction: column;
-    gap: 32px;
+    gap: 24px;
+}
+
+/* ── Tab Navigation ───────────────────────── */
+.tab-nav {
+    display: flex;
+    gap: 4px;
+    background: var(--bg-surface);
+    border-radius: var(--radius-md);
+    padding: 4px;
+    align-self: flex-start;
+}
+
+.tab-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 16px;
+    border-radius: 7px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    font-family: var(--font-sans);
+    font-size: 0.82rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: color 200ms ease, background 200ms ease;
+}
+
+.tab-btn:hover {
+    color: var(--text-secondary);
+    background: rgba(255,255,255,0.04);
+}
+
+.tab-btn.active {
+    background: var(--accent);
+    color: white;
 }
 
 /* ── Header ───────────────────────────────── */
@@ -352,73 +388,46 @@ body::before {
     align-items: start;
 }
 
-/* ── Arc Gauge ────────────────────────────── */
-.gauge-card {
+/* ── Multi-Label Bars ─────────────────────── */
+.multi-label-card {
     display: flex;
     flex-direction: column;
-    align-items: center;
+    gap: 12px;
+    justify-content: center;
+}
+
+.label-row {
+    display: flex;
+    flex-direction: column;
     gap: 4px;
 }
 
-.arc-gauge {
-    position: relative;
-    width: 150px;
-    height: 95px;
-}
-
-.arc-gauge svg {
-    width: 100%;
-    height: 100%;
-}
-
-.gauge-track {
-    fill: none;
-    stroke: rgba(255, 255, 255, 0.04);
-    stroke-width: 7;
-    stroke-linecap: round;
-}
-
-.gauge-fill {
-    fill: none;
-    stroke: var(--color-safe);
-    stroke-width: 7;
-    stroke-linecap: round;
-    stroke-dasharray: 267;
-    stroke-dashoffset: 267;
-    transition: stroke-dashoffset 1.8s cubic-bezier(0.65, 0, 0.35, 1),
-                stroke 0.4s ease;
-}
-
-.gauge-center {
-    position: absolute;
-    bottom: 6px;
-    left: 50%;
-    transform: translateX(-50%);
+.label-header {
     display: flex;
-    align-items: baseline;
-    gap: 1px;
-}
-
-.gauge-percent {
-    font-family: var(--font-serif);
-    font-size: 2.2rem;
-    font-weight: 400;
-    line-height: 1;
-    color: var(--text-primary);
-}
-
-.gauge-unit {
-    font-size: 0.8rem;
+    justify-content: space-between;
+    font-size: 0.75rem;
     font-weight: 500;
-    color: var(--text-muted);
+    color: var(--text-secondary);
 }
 
-.gauge-caption {
-    font-size: 0.7rem;
-    color: var(--text-muted);
-    font-weight: 500;
-    letter-spacing: 0.3px;
+.label-track {
+    height: 6px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 3px;
+    overflow: hidden;
 }
+
+.label-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 3px;
+    background: var(--color-safe);
+    transition: width 0.8s var(--ease-out), background-color 0.4s ease;
+}
+
+.label-fill.fill-safe { background-color: var(--color-safe); }
+.label-fill.fill-warn { background-color: var(--color-warn); }
+.label-fill.fill-danger { background-color: var(--color-danger); }
 
 /* ── Verdict Card ─────────────────────────── */
 .verdict-card {
@@ -687,3 +696,126 @@ body::before {
 @media (max-width: 380px) {
     .header-stats { display: none; }
 }
+
+/* ═══════════════════════════════════════════════
+   ANALYTICS DASHBOARD
+   ═══════════════════════════════════════════════ */
+
+/* ── Empty State ──────────────────────────── */
+.analytics-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    padding: 80px 20px;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.analytics-empty svg {
+    opacity: 0.4;
+}
+
+/* ── Stat Summary Cards ───────────────────── */
+.stat-cards {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.stat-card {
+    background: var(--bg-surface);
+    border-radius: var(--radius-md);
+    padding: 18px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    border: 1px solid var(--border-subtle);
+}
+
+.stat-card-value {
+    font-family: var(--font-serif);
+    font-size: 1.8rem;
+    font-weight: 400;
+    color: var(--text-primary);
+    line-height: 1;
+}
+
+.stat-card-label {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* ── Charts Grid ──────────────────────────── */
+.charts-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+}
+
+.chart-card {
+    background: var(--bg-surface);
+    border-radius: var(--radius-lg);
+    padding: 20px 24px;
+    border: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    animation: fade-in 400ms var(--ease-out);
+}
+
+.chart-card--wide {
+    grid-column: 1 / -1;
+}
+
+.chart-card-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+}
+
+.chart-title {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.chart-subtitle {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+}
+
+.chart-body {
+    position: relative;
+    height: 200px;
+}
+
+.chart-body--sm {
+    height: 180px;
+}
+
+/* ── Dashboard visibility ─────────────────── */
+.dashboard.hidden {
+    display: none;
+}
+
+/* ── Responsive Analytics ─────────────────── */
+@media (max-width: 640px) {
+    .stat-cards {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .charts-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .chart-card--wide {
+        grid-column: 1;
+    }
+}
+

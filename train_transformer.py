@@ -105,8 +105,8 @@ def train_epoch(model, dataloader, optimizer, scheduler, device, epoch_num):
         scheduler.step()
 
         total_loss += loss.item()
-        preds = torch.argmax(logits, dim=1)
-        correct += (preds == labels).sum().item()
+        preds = (torch.sigmoid(logits) > 0.5).float()
+        correct += (preds == labels).all(dim=1).sum().item()
         total += labels.size(0)
 
         # Progress every 10 batches
@@ -145,7 +145,7 @@ def evaluate(model, dataloader, device):
             outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
             total_loss += outputs.loss.item()
 
-            preds = torch.argmax(outputs.logits, dim=1)
+            preds = (torch.sigmoid(outputs.logits) > 0.5).float()
             all_preds.extend(preds.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
 
@@ -171,12 +171,18 @@ def main():
     # 2. Load & balance dataset (identical logic to Phase 1)
     print("Loading Jigsaw dataset...")
     dataset = load_dataset("tasksource/jigsaw_toxicity", split="train")
-    dataset = dataset.select(range(SAMPLE_SIZE))
+    # dataset = dataset.select(range(SAMPLE_SIZE))  # Using whole dataset
     df = pd.DataFrame(dataset)
 
     toxic_columns = ['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']
     available_cols = [col for col in toxic_columns if col in df.columns]
     df['is_toxic'] = df[available_cols].max(axis=1).astype(int)
+
+    # Map to our 5 target categories
+    df['hate_speech'] = df['identity_hate'] if 'identity_hate' in available_cols else 0
+    df['abusive'] = df[['obscene', 'severe_toxic']].max(axis=1) if 'obscene' in available_cols and 'severe_toxic' in available_cols else 0
+    
+    TARGET_COLS = ['toxic', 'hate_speech', 'insult', 'threat', 'abusive']
 
     # Under-sample majority class to balance
     toxic_df = df[df['is_toxic'] == 1]
@@ -189,7 +195,7 @@ def main():
 
     # 3. Split
     X_train, X_test, y_train, y_test = train_test_split(
-        balanced_df['comment_text'], balanced_df['is_toxic'],
+        balanced_df['comment_text'], balanced_df[TARGET_COLS],
         test_size=0.2, random_state=42, stratify=balanced_df['is_toxic']
     )
     print(f"Train: {len(X_train)} | Test: {len(X_test)}")
@@ -204,8 +210,8 @@ def main():
     train_ids, train_masks = tokenize_all(X_train, tokenizer, MAX_LEN)
     test_ids, test_masks = tokenize_all(X_test, tokenizer, MAX_LEN)
 
-    train_labels = torch.tensor(y_train.values, dtype=torch.long)
-    test_labels = torch.tensor(y_test.values, dtype=torch.long)
+    train_labels = torch.tensor(y_train.values, dtype=torch.float)
+    test_labels = torch.tensor(y_test.values, dtype=torch.float)
 
     train_dataset = PreTokenizedDataset(train_ids, train_masks, train_labels)
     test_dataset = PreTokenizedDataset(test_ids, test_masks, test_labels)
@@ -217,7 +223,8 @@ def main():
     print("\nLoading DistilBERT model for fine-tuning...")
     model = DistilBertForSequenceClassification.from_pretrained(
         MODEL_NAME,
-        num_labels=2,
+        num_labels=5,
+        problem_type="multi_label_classification"
     )
 
     # FREEZE the DistilBERT base transformer layers.
@@ -270,17 +277,20 @@ def main():
     print(f"{'='*55}\n")
 
     _, final_preds, final_labels = evaluate(model, test_loader, device)
-    print(f"Accuracy: {accuracy_score(final_labels, final_preds):.4f}\n")
+    print(f"Exact Match Accuracy: {accuracy_score(final_labels, final_preds):.4f}\n")
     print("Classification Report:")
-    print(classification_report(final_labels, final_preds, target_names=["non-toxic", "toxic"]))
-    print("Confusion Matrix:")
-    print(confusion_matrix(final_labels, final_preds))
+    print(classification_report(final_labels, final_preds, target_names=['toxic', 'hate_speech', 'insult', 'threat', 'abusive'], zero_division=0))
 
     # 10. Save model + tokenizer
-    print(f"\nSaving model to '{OUTPUT_DIR}/'...")
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    model.save_pretrained(OUTPUT_DIR)
-    tokenizer.save_pretrained(OUTPUT_DIR)
+    import shutil
+    TMP_OUTPUT_DIR = "/tmp/sentinel_model"
+    print(f"\nSaving model to '{TMP_OUTPUT_DIR}/'...")
+    os.makedirs(TMP_OUTPUT_DIR, exist_ok=True)
+    model.save_pretrained(TMP_OUTPUT_DIR)
+    tokenizer.save_pretrained(TMP_OUTPUT_DIR)
+
+    print(f"Copying model from tmp to '{OUTPUT_DIR}/'...")
+    shutil.copytree(TMP_OUTPUT_DIR, OUTPUT_DIR, dirs_exist_ok=True)
 
     total_elapsed = time.time() - total_start
     print(f"\nTotal training time: {total_elapsed/60:.1f} minutes")

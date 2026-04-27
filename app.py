@@ -78,19 +78,22 @@ async def predict_toxicity(request: Request, payload: PredictRequest):
             attention_mask=encoding["attention_mask"],
         )
 
-    # Apply Temperature Scaling to soften the extreme probabilities
-    # Neural networks are often overconfident (outputting 99% or 1%). 
-    # Dividing the logits by a temperature > 1.0 smooths out the distribution.
-    temperature = 10.0 
-    scaled_logits = outputs.logits / temperature
-
-    # Softmax logits → probability
-    probs = torch.nn.functional.softmax(scaled_logits, dim=1)
-    toxic_prob = probs[0][1].item()  # Class 1 = toxic
+    # Apply sigmoid for multi-label classification
+    probs = torch.sigmoid(outputs.logits)
+    
+    categories = ['toxic', 'hate_speech', 'insult', 'threat', 'abusive']
+    results = {}
+    is_toxic = False
+    
+    for i, category in enumerate(categories):
+        prob = round(float(probs[0][i].item()), 4)
+        results[category] = prob
+        if prob >= 0.5:
+            is_toxic = True
 
     return {
-        "toxicity": round(float(toxic_prob), 4),
-        "label": "toxic" if toxic_prob >= 0.5 else "non-toxic"
+        "is_toxic": is_toxic,
+        "categories": results
     }
 
 
@@ -120,16 +123,22 @@ async def predict_toxicity_batch(request: Request, payload: PredictBatchRequest)
             attention_mask=encoding["attention_mask"],
         )
 
-    temperature = 10.0 
-    scaled_logits = outputs.logits / temperature
-    probs = torch.nn.functional.softmax(scaled_logits, dim=1)
+    probs = torch.sigmoid(outputs.logits)
+    categories = ['toxic', 'hate_speech', 'insult', 'threat', 'abusive']
 
     results = []
     for i in range(len(payload.texts)):
-        toxic_prob = probs[i][1].item()
+        cat_probs = {}
+        is_toxic = False
+        for j, category in enumerate(categories):
+            prob = round(float(probs[i][j].item()), 4)
+            cat_probs[category] = prob
+            if prob >= 0.5:
+                is_toxic = True
+                
         results.append({
-            "toxicity": round(float(toxic_prob), 4),
-            "label": "toxic" if toxic_prob >= 0.5 else "non-toxic"
+            "is_toxic": is_toxic,
+            "categories": cat_probs
         })
 
     return {"results": results}
