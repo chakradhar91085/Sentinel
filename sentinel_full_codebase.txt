@@ -1,0 +1,2113 @@
+
+
+================================================================================
+File: .\app.py
+================================================================================
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+from typing import List
+import torch
+from transformers import DistilBertTokenizer, DistilBertForSequenceClassification
+import os
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
+# Define Request Structure
+class PredictRequest(BaseModel):
+    text: str
+
+class PredictBatchRequest(BaseModel):
+    texts: List[str]
+
+limiter = Limiter(key_func=get_remote_address)
+
+app = FastAPI(
+    title="Sentinel API",
+    description="AI-Powered Toxicity Detection & Content Moderation System",
+    version="2.0.0"
+)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Add CORS Middleware to allow requests from our UI
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Load the DistilBERT model + tokenizer into memory on startup
+MODEL_DIR = "sentinel_model"
+
+if os.path.exists(MODEL_DIR):
+    tokenizer = DistilBertTokenizer.from_pretrained(MODEL_DIR)
+    model = DistilBertForSequenceClassification.from_pretrained(MODEL_DIR)
+    model.eval()
+    print(f"[OK] DistilBERT model loaded from '{MODEL_DIR}/'")
+else:
+    tokenizer = None
+    model = None
+    print(f"[!] Model not found at '{MODEL_DIR}/'. Run train_transformer.py first.")
+
+
+@app.post("/predict")
+@limiter.limit("100/minute")
+async def predict_toxicity(request: Request, payload: PredictRequest):
+    """Analyze text for toxicity using the fine-tuned DistilBERT model."""
+    if model is None or tokenizer is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Model is not loaded. Please run train_transformer.py to generate it."
+        )
+
+    # Tokenize the raw input (DistilBERT handles text preprocessing natively)
+    encoding = tokenizer(
+        payload.text,
+        add_special_tokens=True,
+        max_length=128,
+        padding="max_length",
+        truncation=True,
+        return_attention_mask=True,
+        return_tensors="pt",
+    )
+
+    # Inference with no gradient computation for speed
+    with torch.no_grad():
+        outputs = model(
+            input_ids=encoding["input_ids"],
+            attention_mask=encoding["attention_mask"],
+        )
+
+    # Apply Temperature Scaling to soften the extreme probabilities
+    # Neural networks are often overconfident (outputting 99% or 1%). 
+    # Dividing the logits by a temperature > 1.0 smooths out the distribution.
+    temperature = 10.0 
+    scaled_logits = outputs.logits / temperature
+
+    # Softmax logits → probability
+    probs = torch.nn.functional.softmax(scaled_logits, dim=1)
+    toxic_prob = probs[0][1].item()  # Class 1 = toxic
+
+    return {
+        "toxicity": round(float(toxic_prob), 4),
+        "label": "toxic" if toxic_prob >= 0.5 else "non-toxic"
+    }
+
+
+@app.post("/predict_batch")
+@limiter.limit("100/minute")
+async def predict_toxicity_batch(request: Request, payload: PredictBatchRequest):
+    """Analyze a batch of texts for toxicity."""
+    if model is None or tokenizer is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Model is not loaded."
+        )
+
+    encoding = tokenizer(
+        payload.texts,
+        add_special_tokens=True,
+        max_length=128,
+        padding="max_length",
+        truncation=True,
+        return_attention_mask=True,
+        return_tensors="pt",
+    )
+
+    with torch.no_grad():
+        outputs = model(
+            input_ids=encoding["input_ids"],
+            attention_mask=encoding["attention_mask"],
+        )
+
+    temperature = 10.0 
+    scaled_logits = outputs.logits / temperature
+    probs = torch.nn.functional.softmax(scaled_logits, dim=1)
+
+    results = []
+    for i in range(len(payload.texts)):
+        toxic_prob = probs[i][1].item()
+        results.append({
+            "toxicity": round(float(toxic_prob), 4),
+            "label": "toxic" if toxic_prob >= 0.5 else "non-toxic"
+        })
+
+    return {"results": results}
+
+
+@app.get("/health")
+async def health_check():
+    """Check API status and model availability."""
+    return {
+        "status": "healthy",
+        "model_loaded": model is not None,
+        "model_dir": MODEL_DIR,
+    }
+
+
+# Serve frontend static files (must be mounted AFTER API routes)
+FRONTEND_DIR = "frontend"
+if os.path.exists(FRONTEND_DIR):
+    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+    print(f"[OK] Frontend served from '{FRONTEND_DIR}/'")
+else:
+    @app.get("/")
+    async def root():
+        return {"message": "Sentinel API v2.0 — Visit /docs for interactive API documentation."}
+
+
+================================================================================
+File: .\Dockerfile
+================================================================================
+
+# Use official lightweight Python image
+FROM python:3.9-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY . .
+
+# Expose the API port
+EXPOSE 8000
+
+# Command to run the API
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+
+
+================================================================================
+File: .\Dockerfile.train
+================================================================================
+
+FROM pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime
+
+WORKDIR /app
+
+# Install dependencies
+RUN pip install --no-cache-dir datasets pandas scikit-learn transformers accelerate
+
+# Copy training script
+COPY train_transformer.py .
+
+CMD ["python", "train_transformer.py"]
+
+
+================================================================================
+File: .\HANDOFF.md
+================================================================================
+
+# Sentinel Project Handoff
+
+Welcome to the **Sentinel – AI-Powered Toxicity Detection & Moderation System**! 
+
+This document serves as a contextual handoff to help you (the AI) understand the project's state, architecture, and recent changes so that you can immediately assist the user.
+
+## Project Overview
+Sentinel is an end-to-end content moderation tool analyzing text toxicity in real-time. It recently evolved from a simple TF-IDF & Logistic Regression baseline (`train.py`) to a state-of-the-art **Transformer-based implementation utilizing DistilBERT** (`train_transformer.py`).
+
+## Tech Stack
+*   **Machine Learning:** PyTorch, Hugging Face Transformers (`DistilBERT`), Datasets (Jigsaw Toxic Comment Dataset).
+*   **Backend / API:** Python, FastAPI, Uvicorn.
+*   **Frontend:** Vanilla HTML, CSS, JavaScript featuring a warm editorial design with Instrument Serif + DM Sans typography, terracotta accents, and a clean arc gauge.
+
+## Environment & Hardware Context
+*   **Operating System:** Windows, utilizing **WSL2**.
+*   **GPU:** The user possesses an **NVIDIA RTX 5060**.
+*   **Note:** PyTorch natively struggled with Blackwell architecture binaries on Windows, so the user set up CUDA via WSL2 to ensure hardware-accelerated model training and inference. Make sure any script running PyTorch seamlessly checks for and uses `cuda` where applicable.
+
+## Project Structure
+*   `app.py`: The FastAPI application serving the REST endpoints (`/predict`, `/health`) and mounting the frontend static files.
+*   `train_transformer.py`: The script to fetch the Jigsaw dataset, perform NLP preprocessing, and fine-tune `distilbert-base-uncased`. The resulting model is saved in the `sentinel_model/` directory.
+*   `train.py` & `predict.py`: Legacy and CLI scripts (respectively). 
+*   `frontend/`: Contains `index.html`, `style.css`, and `script.js` for the interactive web UI.
+*   `Dockerfile.train`: Docker setup for training tasks.
+
+## Current Status & recent changes
+1. The `train_transformer.py` script was implemented and successfully utilizes GPU acceleration for training.
+2. The `app.py` script was updated to load the Hugging Face model from `sentinel_model/` instead of the legacy `.pkl` file.
+3. The codebase has been synchronized with the user's GitHub repository.
+
+## How to proceed
+When taking over, read the latest user request. If they need to train the model further, ensure it is run in the WSL environment for GPU access. If modifying the UI, remember the aesthetic is strictly premium "**glassmorphism**" as per the user's prior specifications.
+
+
+================================================================================
+File: .\implementation_plan.txt
+================================================================================
+
+# Project Sentinel - Phase 1 MVP Implementation Plan
+
+The objective of this Phase 1 MVP is to build a lightweight machine learning text classifier capable of analyzing comments and assigning a toxicity score and label.
+
+## Proposed Changes
+
+### c:\Projects\Sentinel – AI-Powered Toxicity Detection & Moderation System\
+
+#### [NEW] [requirements.txt](file:///c:/Projects/Sentinel%20%E2%80%93%20AI-Powered%20Toxicity%20Detection%20&%20Moderation%20System/requirements.txt)
+Will define the necessary Python libraries for this phase.
+* `scikit-learn`: For the TF-IDF vectorizer and Logistic Regression models.
+* `pandas`: For dataset handling.
+* `datasets`: To seamlessly download the Jigsaw Toxic Comment dataset from Hugging Face.
+* `joblib`: For efficient serialization of our model components.
+
+#### [NEW] [train.py](file:///c:/Projects/Sentinel%20%E2%80%93%20AI-Powered%20Toxicity%20Detection%20&%20Moderation%20System/train.py)
+This script will act as the training pipeline:
+1. Load a scaled-down subset (e.g., 10,000 samples) of the Hugging Face `jigsaw_toxicity_pred` dataset to enable fast training.
+2. Preprocess the text data (basic cleanups).
+3. Build a pipeline with `TfidfVectorizer` and `LogisticRegression`.
+4. Train the model using the binary "toxic" label.
+5. Save the trained pipeline to `toxicity_model.pkl`.
+
+#### [NEW] [predict.py](file:///c:/Projects/Sentinel%20%E2%80%93%20AI-Powered%20Toxicity%20Detection%20&%20Moderation%20System/predict.py)
+A testing script intended for inference and ensuring the output matches the required format:
+1. Load the saved `toxicity_model.pkl`.
+2. Accept a text input (e.g., via command-line arguments).
+3. Determine the prediction class (`toxic` vs `non-toxic`) and extract the actual toxicity probability score.
+4. Output the result in the exact JSON format specified in the design (`{"toxicity": ..., "label": ... }`).
+
+## User Review Required
+
+> [!WARNING]
+> Since we use the Hugging Face `datasets` library, it requires an internet connection during the initial run to pull the dataset subset. Please ensure that this shouldn't be an issue.
+
+## Open Questions
+
+1. Is `datasets` library okay to use to pull the data directly, or do you already have a `csv` file downloaded locally that you'd rather use?
+2. By default, I will use a subset size of ~10,000 samples to keep training almost instantaneous for an MVP. Does that sound good?
+
+## Verification Plan
+1. Run `pip install -r requirements.txt`.
+2. Run `python train.py` to ensure it successfully trains and outputs the `.pkl` artifact.
+3. Run `python predict.py "You are a terrible person"` and verify the JSON output indicates toxicity properly.
+4. Run `python predict.py "Have a lovely day!"` and verify the JSON output indicates it is non-toxic.
+
+
+================================================================================
+File: .\predict.py
+================================================================================
+
+import json
+import argparse
+import sys
+import torch
+from transformers import DistilBertTokenizer, DistilBertForSequenceClassification
+
+MODEL_DIR = "sentinel_model"
+
+def load_model():
+    """Load the fine-tuned DistilBERT model and tokenizer."""
+    try:
+        tokenizer = DistilBertTokenizer.from_pretrained(MODEL_DIR)
+        model = DistilBertForSequenceClassification.from_pretrained(MODEL_DIR)
+        model.eval()
+        return tokenizer, model
+    except Exception:
+        print(json.dumps({"error": f"Model not found in '{MODEL_DIR}/'. Please run train_transformer.py first."}))
+        sys.exit(1)
+
+def predict_toxicity(raw_text, tokenizer, model):
+    """Run inference on a single text input using the transformer model."""
+    # DistilBERT tokenizer handles all preprocessing (no manual clean_text needed)
+    encoding = tokenizer(
+        raw_text,
+        add_special_tokens=True,
+        max_length=128,
+        padding="max_length",
+        truncation=True,
+        return_attention_mask=True,
+        return_tensors="pt",
+    )
+
+    with torch.no_grad():
+        outputs = model(
+            input_ids=encoding["input_ids"],
+            attention_mask=encoding["attention_mask"],
+        )
+
+    # Softmax to convert logits → probabilities
+    probs = torch.nn.functional.softmax(outputs.logits, dim=1)
+    toxic_prob = probs[0][1].item()  # Class 1 = toxic
+
+    result = {
+        "toxicity": round(toxic_prob, 4),
+        "label": "toxic" if toxic_prob >= 0.5 else "non-toxic"
+    }
+
+    print(json.dumps(result, indent=2))
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Predict toxicity of a comment.")
+    parser.add_argument("text", type=str, help="The comment text to analyze")
+    args = parser.parse_args()
+
+    tokenizer, model = load_model()
+    predict_toxicity(args.text, tokenizer, model)
+
+
+================================================================================
+File: .\README.md
+================================================================================
+
+<div align="center">
+
+# 🛡️ Sentinel
+
+**AI-Powered Toxicity Detection & Content Moderation System**
+
+*Real-time text analysis powered by a fine-tuned DistilBERT transformer*
+
+</div>
+
+---
+
+## Overview
+
+Sentinel is an end-to-end content moderation system that uses a fine-tuned **DistilBERT** transformer model to detect toxic language in real-time. It ships with a premium glassmorphism web UI, a FastAPI backend, and achieves strong accuracy on the Jigsaw Toxic Comment dataset.
+
+## Features
+
+- 🧠 **DistilBERT Transformer** — Fine-tuned on 50k samples from the Jigsaw Toxic Comment dataset
+- ⚡ **Real-time Analysis** — Sub-second inference with toxicity probability scoring
+- 🎨 **Premium UI** — Glassmorphism design with animated arc gauge, particle background, and scan history
+- 🔌 **REST API** — Clean FastAPI backend with automatic Swagger documentation
+- 📊 **Detailed Results** — Toxicity percentage, confidence score, and 5-tier verdict classification
+- 🗂️ **Scan History** — LocalStorage-backed history of past analyses
+- ⌨️ **Keyboard Shortcuts** — `Ctrl + Enter` for quick analysis
+- 🧪 **Quick Test Chips** — One-click example inputs (Friendly, Hostile, Neutral, Abusive)
+
+## Quick Start
+
+### 1. Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 2. Train the Model
+
+```bash
+python train_transformer.py
+```
+
+Fine-tunes DistilBERT on the Jigsaw dataset (~50k samples). Training takes approximately 15–30 minutes on CPU with frozen base layers.
+
+### 3. Launch the App
+
+```bash
+uvicorn app:app --reload
+```
+
+Visit **http://localhost:8000** to use the web interface.
+
+## API Reference
+
+### `POST /predict`
+
+Analyze text for toxicity.
+
+**Request:**
+```json
+{
+  "text": "Your text here"
+}
+```
+
+**Response:**
+```json
+{
+  "toxicity": 0.9234,
+  "label": "toxic"
+}
+```
+
+### `GET /health`
+
+Check API and model status.
+
+```json
+{
+  "status": "healthy",
+  "model_loaded": true,
+  "model_dir": "sentinel_model"
+}
+```
+
+### `GET /docs`
+
+Interactive Swagger API documentation (auto-generated by FastAPI).
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Model | DistilBERT (Hugging Face Transformers) |
+| Backend | FastAPI + Uvicorn |
+| Frontend | Vanilla HTML / CSS / JavaScript |
+| Training Data | Jigsaw Toxic Comment Dataset |
+| ML Framework | PyTorch |
+
+## Project Structure
+
+```
+sentinel/
+├── app.py                  # FastAPI backend + static file serving
+├── train_transformer.py    # DistilBERT fine-tuning pipeline
+├── train.py                # Legacy sklearn model (Phase 1)
+├── predict.py              # CLI prediction tool
+├── requirements.txt        # Python dependencies
+├── README.md
+├── frontend/
+│   ├── index.html          # Web interface
+│   ├── style.css           # Premium stylesheet
+│   └── script.js           # Frontend logic + particle system
+└── sentinel_model/         # Saved model artifacts (after training)
+```
+
+## CLI Usage
+
+You can also run predictions from the command line:
+
+```bash
+python predict.py "You are a terrible person"
+```
+
+Output:
+```json
+{
+  "toxicity": 0.9412,
+  "label": "toxic"
+}
+```
+
+## License
+
+This project is for educational and research purposes.
+
+
+================================================================================
+File: .\requirements.txt
+================================================================================
+
+scikit-learn
+pandas
+datasets
+joblib
+fastapi
+uvicorn
+transformers
+torch
+accelerate
+slowapi
+
+
+================================================================================
+File: .\train.py
+================================================================================
+
+import pandas as pd
+import re
+from datasets import load_dataset
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import make_pipeline
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
+import joblib
+
+def clean_text(text):
+    """Lowercases, removes punctuation, keeps only alphabets and spaces."""
+    text = str(text).lower()
+    text = re.sub(r'[^a-z\s]', '', text)
+    return text.strip()
+
+def main():
+    print("Loading dataset...")
+    # Load dataset
+    dataset = load_dataset("tasksource/jigsaw_toxicity", split="train")
+    
+    # We will use exactly 50,000 samples
+    dataset = dataset.select(range(50000))
+    df = pd.DataFrame(dataset)
+
+    print("Preprocessing data...")
+    # 3. Apply text preprocessing
+    df['comment_text'] = df['comment_text'].apply(clean_text)
+    
+    # 1. Combine Toxic Labels 
+    # Determine the presence of any toxic identity attribute
+    toxic_columns = ['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']
+    available_cols = [col for col in toxic_columns if col in df.columns]
+    
+    df['is_toxic'] = df[available_cols].max(axis=1).astype(int)
+
+    print(f"Total samples before balancing: {len(df)} (Toxic: {df['is_toxic'].sum()})")
+
+    # 2. Handle Dataset Imbalance
+    toxic_df = df[df['is_toxic'] == 1]
+    clean_df = df[df['is_toxic'] == 0]
+    
+    # Under-sample majority class exactly to match toxic
+    n_toxic = len(toxic_df)
+    clean_downsampled = clean_df.sample(n=n_toxic, random_state=42)
+    
+    # 5. Create balanced dataset
+    balanced_df = pd.concat([toxic_df, clean_downsampled]).sample(frac=1, random_state=42).reset_index(drop=True)
+    
+    print(f"Total samples after balancing: {len(balanced_df)} (Toxic: {balanced_df['is_toxic'].sum()})")
+
+    X = balanced_df['comment_text']
+    y = balanced_df['is_toxic']
+
+    # Train Test Split (80/20) for 6. Evaluation metrics
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    print("Training model...")
+    # 4. Improve TF-IDF Vectorizer
+    pipeline = make_pipeline(
+        TfidfVectorizer(max_features=20000, ngram_range=(1,2), stop_words='english'),
+        LogisticRegression(max_iter=1000)
+    )
+
+    pipeline.fit(X_train, y_train)
+
+    print("Evaluating model...")
+    y_pred = pipeline.predict(X_test)
+    
+    # 6. Print evaluation metrics
+    print("\n--- Evaluation Metrics ---")
+    print(f"Accuracy: {accuracy_score(y_test, y_pred):.4f}")
+    print("\nClassification Report:")
+    print(classification_report(y_test, y_pred, target_names=['non-toxic', 'toxic']))
+    print("Confusion Matrix:")
+    print(confusion_matrix(y_test, y_pred))
+    print("--------------------------\n")
+
+    # 7. Save model pipeline
+    model_path = "toxicity_model.pkl"
+    joblib.dump(pipeline, model_path)
+    print(f"Model saved to {model_path}.")
+
+if __name__ == "__main__":
+    main()
+
+
+================================================================================
+File: .\train_transformer.py
+================================================================================
+
+"""
+Sentinel Phase 4 — Fine-tune DistilBERT for Toxicity Detection
+Optimized for CPU training:
+  - Pre-tokenizes ALL data upfront (no lazy tokenization)
+  - Freezes DistilBERT base layers, only trains classifier head (massively faster)
+  - Auto-detects GPU (CUDA) and falls back to CPU
+"""
+
+import os
+import time
+import pandas as pd
+import numpy as np
+from datasets import load_dataset
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+
+import torch
+from torch.utils.data import Dataset, DataLoader
+from torch.optim import AdamW
+from transformers import (
+    DistilBertTokenizer,
+    DistilBertForSequenceClassification,
+    get_linear_schedule_with_warmup,
+)
+
+# ──────────────────────────────────────────────
+# Config
+# ──────────────────────────────────────────────
+MODEL_NAME = "distilbert-base-uncased"
+MAX_LEN = 128          # Max token length per comment
+BATCH_SIZE = 32
+EPOCHS = 3
+LEARNING_RATE = 2e-5
+SAMPLE_SIZE = 50_000   # Raw samples to pull from Jigsaw
+OUTPUT_DIR = "sentinel_model"
+
+
+# ──────────────────────────────────────────────
+# Pre-tokenize all data upfront (critical for CPU speed)
+# ──────────────────────────────────────────────
+class PreTokenizedDataset(Dataset):
+    """Stores pre-tokenized tensors for zero-overhead DataLoader iteration."""
+
+    def __init__(self, input_ids, attention_masks, labels):
+        self.input_ids = input_ids
+        self.attention_masks = attention_masks
+        self.labels = labels
+
+    def __len__(self):
+        return len(self.labels)
+
+    def __getitem__(self, idx):
+        return {
+            "input_ids": self.input_ids[idx],
+            "attention_mask": self.attention_masks[idx],
+            "label": self.labels[idx],
+        }
+
+
+def tokenize_all(texts, tokenizer, max_len):
+    """Batch-tokenize all texts at once. Much faster than one-by-one."""
+    print(f"  Tokenizing {len(texts)} samples (batch mode)...")
+    start = time.time()
+
+    encoding = tokenizer(
+        texts.tolist(),
+        add_special_tokens=True,
+        max_length=max_len,
+        padding="max_length",
+        truncation=True,
+        return_attention_mask=True,
+        return_tensors="pt",
+    )
+
+    elapsed = time.time() - start
+    print(f"  Tokenization complete in {elapsed:.1f}s")
+
+    return encoding["input_ids"], encoding["attention_mask"]
+
+
+# ──────────────────────────────────────────────
+# Training loop for one epoch
+# ──────────────────────────────────────────────
+def train_epoch(model, dataloader, optimizer, scheduler, device, epoch_num):
+    model.train()
+    total_loss = 0
+    correct = 0
+    total = 0
+    start_time = time.time()
+    num_batches = len(dataloader)
+
+    for batch_idx, batch in enumerate(dataloader):
+        input_ids = batch["input_ids"].to(device)
+        attention_mask = batch["attention_mask"].to(device)
+        labels = batch["label"].to(device)
+
+        optimizer.zero_grad()
+        outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+        loss = outputs.loss
+        logits = outputs.logits
+
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        optimizer.step()
+        scheduler.step()
+
+        total_loss += loss.item()
+        preds = torch.argmax(logits, dim=1)
+        correct += (preds == labels).sum().item()
+        total += labels.size(0)
+
+        # Progress every 10 batches
+        if (batch_idx + 1) % 10 == 0 or (batch_idx + 1) == num_batches:
+            elapsed = time.time() - start_time
+            batches_done = batch_idx + 1
+            batches_left = num_batches - batches_done
+            time_per_batch = elapsed / batches_done
+            eta = batches_left * time_per_batch
+
+            print(f"    [{batches_done}/{num_batches}] "
+                  f"Loss: {loss.item():.4f} | "
+                  f"Acc: {correct/total:.4f} | "
+                  f"ETA: {eta:.0f}s")
+
+    avg_loss = total_loss / num_batches
+    accuracy = correct / total
+    return avg_loss, accuracy
+
+
+# ──────────────────────────────────────────────
+# Evaluation loop
+# ──────────────────────────────────────────────
+def evaluate(model, dataloader, device):
+    model.eval()
+    all_preds = []
+    all_labels = []
+    total_loss = 0
+
+    with torch.no_grad():
+        for batch in dataloader:
+            input_ids = batch["input_ids"].to(device)
+            attention_mask = batch["attention_mask"].to(device)
+            labels = batch["label"].to(device)
+
+            outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+            total_loss += outputs.loss.item()
+
+            preds = torch.argmax(outputs.logits, dim=1)
+            all_preds.extend(preds.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
+
+    avg_loss = total_loss / len(dataloader)
+    return avg_loss, np.array(all_preds), np.array(all_labels)
+
+
+# ──────────────────────────────────────────────
+# Main pipeline
+# ──────────────────────────────────────────────
+def main():
+    total_start = time.time()
+
+    # 1. Device selection
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+    if device.type == "cuda":
+        print(f"  GPU: {torch.cuda.get_device_name(0)}")
+    else:
+        print("  (Tip: GPU training is ~10x faster. Use WSL2 with CUDA for best results.)")
+    print()
+
+    # 2. Load & balance dataset (identical logic to Phase 1)
+    print("Loading Jigsaw dataset...")
+    dataset = load_dataset("tasksource/jigsaw_toxicity", split="train")
+    dataset = dataset.select(range(SAMPLE_SIZE))
+    df = pd.DataFrame(dataset)
+
+    toxic_columns = ['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']
+    available_cols = [col for col in toxic_columns if col in df.columns]
+    df['is_toxic'] = df[available_cols].max(axis=1).astype(int)
+
+    # Under-sample majority class to balance
+    toxic_df = df[df['is_toxic'] == 1]
+    clean_df = df[df['is_toxic'] == 0]
+    n_toxic = len(toxic_df)
+    clean_downsampled = clean_df.sample(n=n_toxic, random_state=42)
+    balanced_df = pd.concat([toxic_df, clean_downsampled]).sample(frac=1, random_state=42).reset_index(drop=True)
+
+    print(f"Balanced dataset: {len(balanced_df)} samples ({balanced_df['is_toxic'].sum()} toxic / {(balanced_df['is_toxic'] == 0).sum()} clean)")
+
+    # 3. Split
+    X_train, X_test, y_train, y_test = train_test_split(
+        balanced_df['comment_text'], balanced_df['is_toxic'],
+        test_size=0.2, random_state=42, stratify=balanced_df['is_toxic']
+    )
+    print(f"Train: {len(X_train)} | Test: {len(X_test)}")
+    print()
+
+    # 4. Tokenizer — load once
+    print("Loading DistilBERT tokenizer...")
+    tokenizer = DistilBertTokenizer.from_pretrained(MODEL_NAME)
+
+    # 5. PRE-TOKENIZE everything upfront (critical optimization)
+    print("Pre-tokenizing all data...")
+    train_ids, train_masks = tokenize_all(X_train, tokenizer, MAX_LEN)
+    test_ids, test_masks = tokenize_all(X_test, tokenizer, MAX_LEN)
+
+    train_labels = torch.tensor(y_train.values, dtype=torch.long)
+    test_labels = torch.tensor(y_test.values, dtype=torch.long)
+
+    train_dataset = PreTokenizedDataset(train_ids, train_masks, train_labels)
+    test_dataset = PreTokenizedDataset(test_ids, test_masks, test_labels)
+
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0)
+    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
+
+    # 6. Model
+    print("\nLoading DistilBERT model for fine-tuning...")
+    model = DistilBertForSequenceClassification.from_pretrained(
+        MODEL_NAME,
+        num_labels=2,
+    )
+
+    # FREEZE the DistilBERT base transformer layers.
+    # Only the classifier head (pre_classifier + classifier) will train.
+    # This prevents overfitting on small datasets and produces well-calibrated
+    # probability scores instead of overconfident 0%/100% predictions.
+    for param in model.distilbert.parameters():
+        param.requires_grad = False
+
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    frozen = sum(p.numel() for p in model.parameters() if not p.requires_grad)
+    print(f"  Trainable params: {trainable:,} | Frozen params: {frozen:,}")
+
+    model.to(device)
+
+    # 7. Optimizer & scheduler (only for trainable params)
+    optimizer = AdamW(
+        filter(lambda p: p.requires_grad, model.parameters()),
+        lr=LEARNING_RATE,
+        weight_decay=0.01,
+    )
+    total_steps = len(train_loader) * EPOCHS
+    scheduler = get_linear_schedule_with_warmup(
+        optimizer,
+        num_warmup_steps=int(0.1 * total_steps),
+        num_training_steps=total_steps,
+    )
+
+    # 8. Training loop
+    print(f"\n{'='*55}")
+    print(f"  TRAINING — {EPOCHS} epochs, {len(train_loader)} batches/epoch")
+    print(f"{'='*55}\n")
+
+    for epoch in range(EPOCHS):
+        epoch_start = time.time()
+        print(f"  Epoch {epoch + 1}/{EPOCHS}")
+
+        train_loss, train_acc = train_epoch(model, train_loader, optimizer, scheduler, device, epoch)
+        epoch_elapsed = time.time() - epoch_start
+        print(f"    Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f} | Time: {epoch_elapsed:.0f}s")
+
+        val_loss, val_preds, val_labels = evaluate(model, test_loader, device)
+        val_acc = accuracy_score(val_labels, val_preds)
+        print(f"    Val Loss:   {val_loss:.4f} | Val Acc:   {val_acc:.4f}")
+        print()
+
+    # 9. Final evaluation
+    print(f"{'='*55}")
+    print(f"  FINAL EVALUATION")
+    print(f"{'='*55}\n")
+
+    _, final_preds, final_labels = evaluate(model, test_loader, device)
+    print(f"Accuracy: {accuracy_score(final_labels, final_preds):.4f}\n")
+    print("Classification Report:")
+    print(classification_report(final_labels, final_preds, target_names=["non-toxic", "toxic"]))
+    print("Confusion Matrix:")
+    print(confusion_matrix(final_labels, final_preds))
+
+    # 10. Save model + tokenizer
+    print(f"\nSaving model to '{OUTPUT_DIR}/'...")
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    model.save_pretrained(OUTPUT_DIR)
+    tokenizer.save_pretrained(OUTPUT_DIR)
+
+    total_elapsed = time.time() - total_start
+    print(f"\nTotal training time: {total_elapsed/60:.1f} minutes")
+    print(f"Model + tokenizer saved to '{OUTPUT_DIR}/' successfully!")
+
+
+if __name__ == "__main__":
+    main()
+
+
+================================================================================
+File: .\frontend\index.html
+================================================================================
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sentinel — AI Toxicity Detection</title>
+    <meta name="description" content="Real-time AI-powered content moderation using DistilBERT transformer technology. Analyze text toxicity instantly.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="brand">
+                <h1>Sentinel</h1>
+            </div>
+            <div class="header-stats">
+                <div class="header-stat">
+                    <span class="header-stat-value" id="totalScans">0</span>
+                    <span class="header-stat-label">scans</span>
+                </div>
+                <div class="header-stat-divider"></div>
+                <div class="header-stat">
+                    <span class="header-stat-value" id="avgScore">—</span>
+                    <span class="header-stat-label">avg</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Card -->
+        <main class="main-card" id="mainCard">
+            <!-- Scanner Section -->
+            <section class="scanner">
+                <div class="section-label">
+                    <span>Content Scanner</span>
+                </div>
+
+                <div class="textarea-wrapper" id="textareaWrapper">
+                    <button class="btn-clear-text hidden" id="clearTextBtn" aria-label="Clear text" title="Clear text">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                    </button>
+                    <textarea
+                        id="commentInput"
+                        placeholder="What would you like to check?"
+                        maxlength="5000"
+                        spellcheck="false"
+                    ></textarea>
+                    <div class="textarea-footer">
+                        <span class="char-counter"><span id="charCount">0</span> / 5,000</span>
+                    </div>
+                </div>
+
+                <div class="quick-tests">
+                    <button class="chip chip-safe" data-text="You're doing great, keep up the amazing work! I really appreciate your contributions to the team.">friendly</button>
+                    <button class="chip chip-danger" data-text="You are the worst person ever, I absolutely despise everything about you and wish you'd disappear.">hostile</button>
+                    <button class="chip chip-neutral" data-text="The quarterly earnings report indicates a 12% increase in revenue compared to the previous fiscal year.">neutral</button>
+                    <button class="chip chip-warn" data-text="Shut up you stupid idiot, nobody cares about your dumb opinions. Just stop talking already.">harsh</button>
+                </div>
+
+                <button id="scanBtn" class="btn-scan">
+                    <div class="btn-scan-content" id="btnContent">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="11" cy="11" r="8"/>
+                            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                        </svg>
+                        <span>Analyze</span>
+                    </div>
+                    <div class="btn-scan-loading hidden" id="btnLoading">
+                        <div class="dot-pulse">
+                            <div class="dot"></div>
+                            <div class="dot"></div>
+                            <div class="dot"></div>
+                        </div>
+                        <span>Scanning…</span>
+                    </div>
+                </button>
+            </section>
+
+            <!-- Divider -->
+            <div class="section-divider" id="resultsDivider"></div>
+
+            <!-- Results Section -->
+            <section class="results" id="resultsSection">
+                <div class="section-label">
+                    <span>Result</span>
+                </div>
+
+                <div class="results-grid">
+                    <!-- Gauge -->
+                    <div class="gauge-card">
+                        <div class="arc-gauge">
+                            <svg viewBox="0 0 200 120" id="gaugeSvg">
+                                <path class="gauge-track" d="M 15 100 A 85 85 0 0 1 185 100" />
+                                <path class="gauge-fill" id="gaugeFill" d="M 15 100 A 85 85 0 0 1 185 100" />
+                            </svg>
+                            <div class="gauge-center">
+                                <span class="gauge-percent" id="gaugePercent">0</span>
+                                <span class="gauge-unit">%</span>
+                            </div>
+                        </div>
+                        <span class="gauge-caption">toxicity</span>
+                    </div>
+
+                    <!-- Verdict -->
+                    <div class="verdict-card" id="verdictCard">
+                        <div class="verdict-header">
+                            <div>
+                                <h3 class="verdict-title" id="verdictTitle">Safe Content</h3>
+                                <p class="verdict-desc" id="verdictDesc">This content appears to be safe and non-harmful.</p>
+                            </div>
+                            <button id="copyResultBtn" class="btn-icon" aria-label="Copy result" title="Copy Result">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 20 0 0 1-2-2V4a2 20 0 0 1 2-2h9a2 20 0 0 1 2 2v1"></path></svg>
+                            </button>
+                        </div>
+                        <div class="confidence-wrapper">
+                            <div class="confidence-label">
+                                <span>Confidence</span>
+                                <span id="confidenceValue">0%</span>
+                            </div>
+                            <div class="confidence-track">
+                                <div class="confidence-fill" id="confidenceFill"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- History Section -->
+        <section class="history-section" id="historySection">
+            <div class="history-header">
+                <h3 class="history-title">Recent</h3>
+                <button id="clearHistoryBtn" class="btn-clear">Clear</button>
+            </div>
+            <div class="history-list" id="historyList"></div>
+        </section>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <span>Sentinel</span>
+        </footer>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg>
+        <span id="toastMessage">Error</span>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
+
+
+================================================================================
+File: .\frontend\script.js
+================================================================================
+
+/* =============================================
+   SENTINEL — Frontend Logic
+   ============================================= */
+
+// ── DOM References ──────────────────────────
+const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => document.querySelectorAll(sel);
+
+const DOM = {
+    mainCard:        $('#mainCard'),
+    commentInput:    $('#commentInput'),
+    charCount:       $('#charCount'),
+    scanBtn:         $('#scanBtn'),
+    btnContent:      $('#btnContent'),
+    btnLoading:      $('#btnLoading'),
+    resultsDivider:  $('#resultsDivider'),
+    resultsSection:  $('#resultsSection'),
+    gaugeFill:       $('#gaugeFill'),
+    gaugePercent:    $('#gaugePercent'),
+    verdictCard:     $('#verdictCard'),
+    verdictTitle:    $('#verdictTitle'),
+    verdictDesc:     $('#verdictDesc'),
+    confidenceValue: $('#confidenceValue'),
+    confidenceFill:  $('#confidenceFill'),
+    historySection:  $('#historySection'),
+    historyList:     $('#historyList'),
+    clearHistoryBtn: $('#clearHistoryBtn'),
+    toast:           $('#toast'),
+    toastMessage:    $('#toastMessage'),
+    totalScans:      $('#totalScans'),
+    avgScore:        $('#avgScore'),
+    clearTextBtn:    $('#clearTextBtn'),
+    copyResultBtn:   $('#copyResultBtn'),
+};
+
+// ── Config ──────────────────────────────────
+const API_URL = window.location.protocol === 'file:'
+    ? 'http://127.0.0.1:8000/predict'
+    : '/predict';
+
+const GAUGE_ARC_LENGTH = 267;
+const HISTORY_KEY = 'sentinel_history';
+const MAX_HISTORY = 20;
+
+// ── State ───────────────────────────────────
+let isScanning = false;
+let history = [];
+
+try {
+    history = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+} catch { history = []; }
+
+
+/* ===========================================
+   GAUGE HELPERS
+   =========================================== */
+function getGaugeColor(pct) {
+    if (pct < 30) return { color: 'var(--color-safe)', cls: 'safe' };
+    if (pct < 60) return { color: 'var(--color-warn)', cls: 'warn' };
+    return { color: 'var(--color-danger)', cls: 'danger' };
+}
+
+function animateGauge(targetPct) {
+    const offset = GAUGE_ARC_LENGTH * (1 - targetPct / 100);
+    const color = getGaugeColor(targetPct);
+
+    DOM.gaugeFill.style.stroke = color.color;
+    DOM.gaugeFill.style.strokeDashoffset = offset;
+
+    // Animate counter
+    const duration = 1400;
+    const start = performance.now();
+
+    function tick(now) {
+        const progress = Math.min((now - start) / duration, 1);
+        const eased = 1 - Math.pow(1 - progress, 3);
+        DOM.gaugePercent.textContent = Math.round(eased * targetPct);
+        if (progress < 1) requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+}
+
+
+/* ===========================================
+   VERDICT HELPERS
+   =========================================== */
+function getVerdict(toxicity) {
+    const pct = toxicity * 100;
+    if (pct < 20) return { title: 'Safe Content', desc: 'This content appears to be safe and non-harmful.', cls: 'safe' };
+    if (pct < 40) return { title: 'Mostly Safe', desc: 'This content is mostly safe with minimal concerns.', cls: 'safe' };
+    if (pct < 60) return { title: 'Moderate Risk', desc: 'Moderate toxicity indicators detected. Review recommended.', cls: 'warn' };
+    if (pct < 80) return { title: 'Toxic Content', desc: 'This content is likely toxic. Moderation action may be needed.', cls: 'danger' };
+    return { title: 'Highly Toxic', desc: 'Highly toxic and harmful content. Immediate action recommended.', cls: 'danger' };
+}
+
+
+/* ===========================================
+   CORE ANALYSIS
+   =========================================== */
+async function analyzeContent() {
+    const text = DOM.commentInput.value.trim();
+    if (!text || isScanning) return;
+
+    isScanning = true;
+    setLoading(true);
+    resetResults();
+
+    try {
+        const res = await fetch(API_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text }),
+        });
+
+        if (!res.ok) {
+            const errBody = await res.json().catch(() => null);
+            throw new Error(errBody?.detail || `API returned ${res.status}`);
+        }
+
+        const data = await res.json();
+
+        // Brief pause so loading feels intentional
+        await sleep(450);
+
+        showResults(data, text);
+        addToHistory(text, data);
+        updateStats();
+
+    } catch (err) {
+        showToast(err.message || 'Failed to connect to Sentinel backend.');
+    } finally {
+        isScanning = false;
+        setLoading(false);
+    }
+}
+
+
+/* ===========================================
+   UI FUNCTIONS
+   =========================================== */
+function setLoading(on) {
+    DOM.scanBtn.disabled = on;
+    DOM.btnContent.classList.toggle('hidden', on);
+    DOM.btnLoading.classList.toggle('hidden', !on);
+}
+
+function resetResults() {
+    DOM.gaugeFill.style.strokeDashoffset = GAUGE_ARC_LENGTH;
+    DOM.gaugePercent.textContent = '0';
+    DOM.confidenceFill.style.width = '0%';
+}
+
+function showResults(data, text) {
+    const pct = Math.round(data.toxicity * 100);
+    const confidence = Math.round(Math.abs(data.toxicity - 0.5) * 200);
+    const verdict = getVerdict(data.toxicity);
+
+    // Show divider + results
+    DOM.resultsDivider.classList.add('visible');
+    DOM.resultsSection.classList.add('visible');
+
+    // Verdict card
+    DOM.verdictCard.className = `verdict-card verdict-${verdict.cls}`;
+    DOM.verdictTitle.textContent = verdict.title;
+    DOM.verdictDesc.textContent = verdict.desc;
+
+    // Gauge + confidence (delayed for entrance animation)
+    setTimeout(() => {
+        animateGauge(pct);
+        DOM.confidenceValue.textContent = `${confidence}%`;
+        DOM.confidenceFill.style.width = `${confidence}%`;
+        DOM.confidenceFill.className = `confidence-fill confidence-${verdict.cls}`;
+    }, 250);
+}
+
+
+/* ===========================================
+   HISTORY
+   =========================================== */
+function addToHistory(text, data) {
+    history.unshift({
+        text: text.substring(0, 120),
+        fullText: text,
+        toxicity: data.toxicity,
+        label: data.label,
+        timestamp: new Date().toISOString(),
+    });
+
+    if (history.length > MAX_HISTORY) history.pop();
+
+    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history)); } catch {}
+    renderHistory();
+}
+
+function renderHistory() {
+    if (history.length === 0) {
+        DOM.historySection.classList.remove('visible');
+        return;
+    }
+
+    DOM.historySection.classList.add('visible');
+    DOM.historyList.innerHTML = history.map((entry, i) => {
+        const pct = Math.round(entry.toxicity * 100);
+        const timeAgo = getTimeAgo(entry.timestamp);
+        const colorCls = pct < 30 ? 'safe' : pct < 60 ? 'warn' : 'danger';
+
+        return `
+            <div class="history-item" data-index="${i}" title="Click to load this text">
+                <p class="history-item-text">${escapeHtml(entry.text)}${entry.text.length >= 120 ? '…' : ''}</p>
+                <div class="history-item-meta">
+                    <span class="history-badge badge-${colorCls}">${pct}%</span>
+                    <span class="history-time">${timeAgo}</span>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    // Click to load text
+    DOM.historyList.querySelectorAll('.history-item').forEach(item => {
+        item.addEventListener('click', () => {
+            const idx = parseInt(item.dataset.index);
+            DOM.commentInput.value = history[idx].fullText || history[idx].text;
+            updateCharCount();
+            DOM.commentInput.focus();
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
+    });
+}
+
+function clearHistory() {
+    history = [];
+    try { localStorage.removeItem(HISTORY_KEY); } catch {}
+    renderHistory();
+    updateStats();
+}
+
+
+/* ===========================================
+   STATS
+   =========================================== */
+function updateStats() {
+    DOM.totalScans.textContent = history.length;
+    if (history.length > 0) {
+        const avg = history.reduce((sum, h) => sum + h.toxicity, 0) / history.length;
+        DOM.avgScore.textContent = `${Math.round(avg * 100)}%`;
+    } else {
+        DOM.avgScore.textContent = '—';
+    }
+}
+
+
+/* ===========================================
+   UTILITIES
+   =========================================== */
+function updateCharCount() {
+    DOM.charCount.textContent = DOM.commentInput.value.length.toLocaleString();
+    if (DOM.clearTextBtn) {
+        DOM.clearTextBtn.classList.toggle('hidden', DOM.commentInput.value.length === 0);
+    }
+}
+
+function showToast(message) {
+    DOM.toastMessage.textContent = message;
+    DOM.toast.classList.add('show');
+    setTimeout(() => DOM.toast.classList.remove('show'), 4500);
+}
+
+function escapeHtml(str) {
+    const el = document.createElement('div');
+    el.textContent = str;
+    return el.innerHTML;
+}
+
+function getTimeAgo(iso) {
+    const secs = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+    if (secs < 5) return 'just now';
+    if (secs < 60) return `${secs}s ago`;
+    const mins = Math.floor(secs / 60);
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return `${Math.floor(hrs / 24)}d ago`;
+}
+
+function sleep(ms) {
+    return new Promise(r => setTimeout(r, ms));
+}
+
+
+/* ===========================================
+   EVENT LISTENERS
+   =========================================== */
+DOM.scanBtn.addEventListener('click', analyzeContent);
+
+DOM.commentInput.addEventListener('input', updateCharCount);
+
+DOM.commentInput.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        analyzeContent();
+    }
+});
+
+document.querySelectorAll('.chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+        DOM.commentInput.value = chip.dataset.text;
+        updateCharCount();
+        DOM.commentInput.focus();
+    });
+});
+
+DOM.clearHistoryBtn.addEventListener('click', clearHistory);
+
+if (DOM.clearTextBtn) {
+    DOM.clearTextBtn.addEventListener('click', () => {
+        DOM.commentInput.value = '';
+        updateCharCount();
+        DOM.commentInput.focus();
+    });
+}
+
+if (DOM.copyResultBtn) {
+    DOM.copyResultBtn.addEventListener('click', () => {
+        const text = DOM.commentInput.value.trim();
+        const verdict = DOM.verdictTitle.textContent;
+        const confidence = DOM.confidenceValue.textContent;
+        const resultText = `Sentinel Analysis:\nContent: "${text}"\nVerdict: ${verdict} (Confidence: ${confidence})`;
+        
+        navigator.clipboard.writeText(resultText).then(() => {
+            showToast('Result copied to clipboard!');
+        }).catch(() => {
+            showToast('Failed to copy result.');
+        });
+    });
+}
+
+
+/* ===========================================
+   INITIALIZE
+   =========================================== */
+document.addEventListener('DOMContentLoaded', () => {
+    // History + Stats
+    renderHistory();
+    updateStats();
+
+    // Focus
+    DOM.commentInput.focus();
+});
+
+
+================================================================================
+File: .\frontend\style.css
+================================================================================
+
+/* =============================================
+   SENTINEL — Warm Editorial Design
+   ============================================= */
+
+/* ── Design Tokens ────────────────────────── */
+:root {
+    --bg-primary: #1a1a1a;
+    --bg-surface: #242424;
+    --bg-surface-hover: #2c2c2c;
+    --bg-inset: #1e1e1e;
+
+    --border-subtle: rgba(255, 255, 255, 0.06);
+    --border-medium: rgba(255, 255, 255, 0.1);
+
+    --text-primary: #e8e4df;
+    --text-secondary: #9a9389;
+    --text-muted: #6b645c;
+
+    --accent: #c9785d;
+    --accent-hover: #b8694f;
+    --accent-soft: rgba(201, 120, 93, 0.1);
+
+    --color-safe: #5a9a6e;
+    --color-safe-soft: rgba(90, 154, 110, 0.1);
+    --color-warn: #c4943d;
+    --color-warn-soft: rgba(196, 148, 61, 0.1);
+    --color-danger: #c75454;
+    --color-danger-soft: rgba(199, 84, 84, 0.1);
+
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 16px;
+
+    --font-serif: 'Instrument Serif', Georgia, serif;
+    --font-sans: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+
+    --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ── Reset ────────────────────────────────── */
+*, *::before, *::after {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html {
+    font-size: 16px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+    font-family: var(--font-sans);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    min-height: 100vh;
+    overflow-x: hidden;
+    line-height: 1.6;
+    position: relative;
+}
+
+/* ── Background noise texture ────────────── */
+body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    opacity: 0.03;
+    pointer-events: none;
+    z-index: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+    background-repeat: repeat;
+    background-size: 256px 256px;
+}
+
+.hidden { display: none !important; }
+
+/* ── Layout ───────────────────────────────── */
+.container {
+    position: relative;
+    z-index: 1;
+    max-width: 640px;
+    margin: 0 auto;
+    padding: 48px 20px 32px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+}
+
+/* ── Header ───────────────────────────────── */
+.header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding: 0;
+}
+
+.brand h1 {
+    font-family: var(--font-serif);
+    font-size: 2rem;
+    font-weight: 400;
+    font-style: italic;
+    color: var(--text-primary);
+    letter-spacing: -0.5px;
+}
+
+.header-stats {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+}
+
+.header-stat {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+}
+
+.header-stat-value {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+}
+
+.header-stat-label {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+}
+
+.header-stat-divider {
+    width: 1px;
+    height: 14px;
+    background: var(--border-subtle);
+}
+
+/* ── Main Card ────────────────────────────── */
+.main-card {
+    background: var(--bg-surface);
+    border-radius: var(--radius-lg);
+    padding: 36px 32px 28px;
+    border-top: 3px solid var(--accent);
+}
+
+/* ── Section Labels ───────────────────────── */
+.section-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 16px;
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    letter-spacing: 0.3px;
+}
+
+/* ── Textarea ─────────────────────────────── */
+.textarea-wrapper {
+    position: relative;
+    margin-bottom: 16px;
+}
+
+.textarea-wrapper textarea {
+    width: 100%;
+    height: 120px;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid var(--border-medium);
+    border-radius: 0;
+    padding: 12px 0;
+    padding-bottom: 36px;
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 1rem;
+    line-height: 1.65;
+    resize: none;
+    outline: none;
+    transition: border-color 300ms ease;
+}
+
+.textarea-wrapper textarea:focus {
+    border-color: var(--accent);
+}
+
+.textarea-wrapper textarea::placeholder {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.btn-clear-text {
+    position: absolute;
+    top: 8px;
+    right: 4px;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 6px;
+    border-radius: var(--radius-sm);
+    transition: color 200ms ease, background 200ms ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.btn-clear-text:hover {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.textarea-footer {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    padding: 6px 0;
+    pointer-events: none;
+}
+
+.char-counter {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+/* ── Quick Test Chips ─────────────────────── */
+.quick-tests {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 20px;
+}
+
+.chip {
+    padding: 5px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-subtle);
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    font-weight: 500;
+    font-family: var(--font-sans);
+    cursor: pointer;
+    transition: color 200ms ease, border-color 200ms ease, background 200ms ease;
+    white-space: nowrap;
+}
+
+.chip:hover {
+    color: var(--text-secondary);
+    border-color: var(--border-medium);
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.chip-safe:hover   { color: var(--color-safe); border-color: rgba(90, 154, 110, 0.3); }
+.chip-danger:hover  { color: var(--color-danger); border-color: rgba(199, 84, 84, 0.3); }
+.chip-neutral:hover { color: var(--text-primary); border-color: var(--border-medium); }
+.chip-warn:hover    { color: var(--color-warn); border-color: rgba(196, 148, 61, 0.3); }
+
+/* ── Scan Button ──────────────────────────── */
+.btn-scan {
+    width: 100%;
+    padding: 14px 24px;
+    border: none;
+    border-radius: var(--radius-md);
+    background: var(--accent);
+    color: white;
+    font-family: var(--font-sans);
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 200ms ease;
+}
+
+.btn-scan:hover {
+    background: var(--accent-hover);
+}
+
+.btn-scan:active {
+    background: #a55e44;
+}
+
+.btn-scan:disabled {
+    cursor: not-allowed;
+    opacity: 0.7;
+}
+
+.btn-scan-content,
+.btn-scan-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+/* ── Dot Pulse Loader ─────────────────────── */
+.dot-pulse {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+}
+
+.dot-pulse .dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: white;
+    animation: dot-bounce 1.2s ease-in-out infinite;
+}
+
+.dot-pulse .dot:nth-child(2) { animation-delay: 0.15s; }
+.dot-pulse .dot:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes dot-bounce {
+    0%, 60%, 100% { transform: translateY(0); opacity: 0.35; }
+    30% { transform: translateY(-4px); opacity: 1; }
+}
+
+/* ── Section Divider ──────────────────────── */
+.section-divider {
+    height: 1px;
+    background: var(--border-subtle);
+    margin: 28px 0;
+    opacity: 0;
+    transition: opacity 500ms ease;
+}
+
+.section-divider.visible {
+    opacity: 1;
+}
+
+/* ── Results Section ──────────────────────── */
+.results {
+    opacity: 0;
+    max-height: 0;
+    overflow: hidden;
+    transition: opacity 500ms var(--ease-out), max-height 600ms var(--ease-out);
+}
+
+.results.visible {
+    opacity: 1;
+    max-height: 500px;
+}
+
+.results-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 28px;
+    align-items: start;
+}
+
+/* ── Arc Gauge ────────────────────────────── */
+.gauge-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+}
+
+.arc-gauge {
+    position: relative;
+    width: 150px;
+    height: 95px;
+}
+
+.arc-gauge svg {
+    width: 100%;
+    height: 100%;
+}
+
+.gauge-track {
+    fill: none;
+    stroke: rgba(255, 255, 255, 0.04);
+    stroke-width: 7;
+    stroke-linecap: round;
+}
+
+.gauge-fill {
+    fill: none;
+    stroke: var(--color-safe);
+    stroke-width: 7;
+    stroke-linecap: round;
+    stroke-dasharray: 267;
+    stroke-dashoffset: 267;
+    transition: stroke-dashoffset 1.8s cubic-bezier(0.65, 0, 0.35, 1),
+                stroke 0.4s ease;
+}
+
+.gauge-center {
+    position: absolute;
+    bottom: 6px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: baseline;
+    gap: 1px;
+}
+
+.gauge-percent {
+    font-family: var(--font-serif);
+    font-size: 2.2rem;
+    font-weight: 400;
+    line-height: 1;
+    color: var(--text-primary);
+}
+
+.gauge-unit {
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--text-muted);
+}
+
+.gauge-caption {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    font-weight: 500;
+    letter-spacing: 0.3px;
+}
+
+/* ── Verdict Card ─────────────────────────── */
+.verdict-card {
+    background: var(--bg-inset);
+    border-radius: var(--radius-md);
+    padding: 20px;
+    transition: background 400ms ease;
+}
+
+.verdict-card.verdict-safe  { background: var(--color-safe-soft); }
+.verdict-card.verdict-warn  { background: var(--color-warn-soft); }
+.verdict-card.verdict-danger { background: var(--color-danger-soft); }
+
+.verdict-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+}
+
+.btn-icon {
+    background: transparent;
+    border: 1px solid var(--border-subtle);
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 6px;
+    border-radius: var(--radius-sm);
+    transition: color 200ms ease, border-color 200ms ease, background 200ms ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.btn-icon:hover {
+    color: var(--text-primary);
+    border-color: var(--border-medium);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.verdict-title {
+    font-family: var(--font-serif);
+    font-size: 1.25rem;
+    font-weight: 400;
+    margin-bottom: 6px;
+    transition: color 400ms ease;
+}
+
+.verdict-safe .verdict-title  { color: var(--color-safe); }
+.verdict-warn .verdict-title  { color: var(--color-warn); }
+.verdict-danger .verdict-title { color: var(--color-danger); }
+
+.verdict-desc {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    line-height: 1.55;
+    margin-bottom: 18px;
+}
+
+/* ── Confidence Bar ───────────────────────── */
+.confidence-wrapper {
+    margin-top: 4px;
+}
+
+.confidence-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    font-weight: 500;
+    margin-bottom: 6px;
+}
+
+.confidence-track {
+    height: 4px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.confidence-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 2px;
+    background: var(--color-safe);
+    transition: width 1.2s var(--ease-out), background 400ms ease;
+}
+
+.confidence-fill.confidence-safe   { background: var(--color-safe); }
+.confidence-fill.confidence-warn   { background: var(--color-warn); }
+.confidence-fill.confidence-danger { background: var(--color-danger); }
+
+/* ── History Section ──────────────────────── */
+.history-section {
+    display: none;
+}
+
+.history-section.visible {
+    display: block;
+    animation: fade-in 400ms var(--ease-out);
+}
+
+@keyframes fade-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+.history-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 14px;
+}
+
+.history-title {
+    font-family: var(--font-serif);
+    font-size: 1.1rem;
+    font-weight: 400;
+    font-style: italic;
+    color: var(--text-secondary);
+}
+
+.btn-clear {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    font-family: var(--font-sans);
+    font-weight: 500;
+    padding: 4px 0;
+    cursor: pointer;
+    transition: color 200ms ease;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    text-decoration-color: transparent;
+}
+
+.btn-clear:hover {
+    color: var(--color-danger);
+    text-decoration-color: var(--color-danger);
+}
+
+/* ── History list (vertical) ─────────────── */
+.history-list {
+    display: flex;
+    flex-direction: column;
+}
+
+.history-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border-subtle);
+    cursor: pointer;
+    transition: background 200ms ease;
+}
+
+.history-item:last-child {
+    border-bottom: none;
+}
+
+.history-item:hover {
+    background: rgba(255, 255, 255, 0.015);
+}
+
+.history-item-text {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    flex: 1;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.history-item-meta {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.history-badge {
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    font-variant-numeric: tabular-nums;
+}
+
+.badge-safe   { background: var(--color-safe-soft); color: var(--color-safe); }
+.badge-warn   { background: var(--color-warn-soft); color: var(--color-warn); }
+.badge-danger { background: var(--color-danger-soft); color: var(--color-danger); }
+
+.history-time {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+}
+
+/* ── Toast ─────────────────────────────────── */
+.toast {
+    position: fixed;
+    bottom: -80px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg-surface);
+    border: 1px solid rgba(199, 84, 84, 0.2);
+    color: var(--color-danger);
+    padding: 10px 20px;
+    border-radius: var(--radius-md);
+    font-size: 0.82rem;
+    font-weight: 500;
+    z-index: 100;
+    transition: bottom 400ms var(--ease-out);
+    white-space: nowrap;
+}
+
+.toast.show {
+    bottom: 32px;
+}
+
+/* ── Footer ───────────────────────────────── */
+.footer {
+    text-align: center;
+    padding: 12px 0 20px;
+    font-family: var(--font-serif);
+    font-size: 0.82rem;
+    font-style: italic;
+    color: var(--text-muted);
+}
+
+/* ── Responsive ───────────────────────────── */
+@media (max-width: 640px) {
+    .container { padding: 28px 16px 24px; }
+    .main-card { padding: 24px 20px 20px; }
+    .brand h1 { font-size: 1.65rem; }
+
+    .results-grid {
+        grid-template-columns: 1fr;
+        gap: 20px;
+    }
+
+    .gauge-card {
+        flex-direction: row;
+        gap: 14px;
+    }
+
+    .arc-gauge {
+        width: 110px;
+        height: 70px;
+    }
+
+    .gauge-percent { font-size: 1.6rem; }
+
+    .quick-tests { gap: 5px; }
+    .chip { font-size: 0.7rem; padding: 4px 10px; }
+    .header-stats { gap: 10px; }
+    .header-stat-value { font-size: 0.8rem; }
+}
+
+@media (max-width: 380px) {
+    .header-stats { display: none; }
+}

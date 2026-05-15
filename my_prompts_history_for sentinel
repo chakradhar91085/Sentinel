@@ -1,0 +1,122 @@
+# 🗂️ My Prompt History — All Conversations
+
+A complete log of every prompt sent across all recorded sessions, in chronological order.
+
+---
+
+## 📅 Session: Testing The Sentinel Backend
+**Date:** 2026-04-22 (03:15 IST)
+
+1. > `any suggestions`
+2. > `run the app once`
+3. > `i want all percentages from 1 to 99 not just 1 or 99 why is it only 1 or 99 how can u change that`
+4. > `can u rerun the app`
+5. > `i need more numbers g`
+6. > `it feels hard code to only specific percentages`
+
+---
+
+## 📅 Session: Finalizing Sentinel Toxicity System
+**Date:** 2026-04-18 – 2026-04-21
+*(No conversation log available — session predates log storage)*
+
+---
+
+## 📅 Session: Humanizing Sentinel Frontend UI (Part 1)
+**Date:** 2026-04-21
+*(No conversation log available)*
+
+---
+
+## 📅 Session: Finalizing Sentinel System Implementation / Humanizing Frontend UI (Part 2)
+**Date:** 2026-04-21
+*(No conversation log available)*
+
+---
+
+## 📅 Session: Advancing Sentinel Project Roadmap
+**Date:** 2026-04-20
+*(No conversation log available)*
+
+---
+
+## 📅 Session: Running Friday Stark Project
+**Date:** 2026-04-23 (05:52 IST)
+
+7. > `C:\Projects\friday tony stark demo this is a github project i forked from github it looked awesome so i wanted to try running it can u tell me what do i need to do in order to run`
+
+---
+
+## 📅 Session: Running Project Aegis Graph (Part 1 — AegisGraph + Sentinel multi-label)
+**Date:** 2026-04-24 (12:05 IST) → 2026-04-27 (14:04 IST)
+
+8. > `move to project aegis graph and run it`
+9. > `train the model on the whole dataset on docker`
+10. > `rerun the project g`
+11. > `there is an error`
+
+---
+
+## 📅 Session: Upgrading The Sentinel System (Minor Upgrades + AegisGraph run)
+**Date:** 2026-04-25 (22:12 IST) → 2026-04-26 (18:12 IST)
+
+12. > `navigate to project sentinel and suggest some small upgrades`
+13. > `do it and commit it to my github`
+14. > `go ahead`
+15. > `navigate to aegisgraph and run the project`
+
+---
+
+## 📅 Session: Upgrading Sentinel AI Analytics (Multi-Label + Analytics Dashboard)
+**Date:** 2026-04-27 (08:38 IST) → 2026-04-27 (11:39 IST)
+
+16. > `run aegis graph project`
+17. > `run sentinel ai`
+18. > `we need to make more improvements classification is fine`
+19. > `can u make it look like a mnc company website like a professional website`
+20. > `give me a detailed summary of the whole project on what how why so that i can give it to a llm for further planning`
+21. > `how can i give all the contents of this project to a llm so that it knows the project in and out it can read all the codes and all the files`
+22. > `🔥 Phase 5 — Real-World Intelligence Layer (MOST IMPORTANT)`
+    > *"Right now your model just says: "toxic" / "non-toxic". That's too basic. Upgrade it to: 👉 Multi-class toxicity detection — toxic, hate speech, insult, threat, abusive, spam"*
+23. > `Do you want to just omit "Spam" for now and map the remaining 5 categories lets go with this`
+24. > `Continue`
+25. > `what do u need me to do in order to run it on the gpu?`
+26. > `go ahead run it`
+27. > `can u make an interactive data visualization tab and think and plan before implementing it`
+28. > `go ahead build the dashboard panel`
+
+---
+
+## 📅 Session: Current — Running Sentinel Project
+**Date:** 2026-04-27 (19:03 IST)
+
+29. > `can u run the project`
+30. > `of all the things i prompted overtime can u make a file and give it to me?`  ← *you are here*
+
+---
+
+## 📊 Summary Stats
+
+| Metric | Value |
+|---|---|
+| Total prompts captured | **30** |
+| Sessions with logs | **6 of ~10** |
+| Projects worked on | Sentinel AI, AegisGraph, Friday (Tony Stark Demo) |
+| Date range | Apr 18, 2026 → Apr 27, 2026 |
+
+---
+
+## 🔖 Key Milestones by Prompt
+
+| Prompt | What it caused |
+|---|---|
+| `any suggestions` | First Sentinel session — brainstorming improvements |
+| `run the app once` | First successful run of FastAPI + DistilBERT server |
+| `i want all percentages from 1 to 99` | Discovered model overconfidence → added temperature scaling |
+| `train the model on the whole dataset on docker` | Full Jigsaw dataset training (160k samples) with Docker + GPU |
+| `navigate to project sentinel and suggest some small upgrades` | Added rate limiting (slowapi), batch predict endpoint, production Dockerfile |
+| `do it and commit it to my github` | First GitHub commit pushed automatically |
+| `we need to make more improvements classification is fine` | Pivoted from model training to system/UX improvements |
+| `🔥 Phase 5 — Real-World Intelligence Layer` | Upgraded from binary to 5-label multi-class toxicity detection |
+| `can u make an interactive data visualization tab` | Built full Chart.js Analytics Dashboard (line, doughnut, radar, bar charts) |
+| `can u run the project` | Latest session — Sentinel running at localhost:8000 |
